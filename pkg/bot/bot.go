@@ -33,6 +33,10 @@ type TaskListInterval struct {
 
 const createPrefix = "create"
 const cancelPrefix = "cancel"
+const todayList = "today"
+const weekList = "week"
+const monthList = "month"
+const allList = "all"
 
 var months = []string{
 	"January", "января",
@@ -60,29 +64,10 @@ func (w *Wrapper) Run() {
 	})
 	updater := ext.NewUpdater(dispatcher, nil)
 
-	dispatcher.AddHandler(handlers.NewCommand("all", w.taskListHandler(TaskListInterval{})))
-	now := time.Now()
-	dispatcher.AddHandler(handlers.NewCommand(
-		"today",
-		w.taskListHandler(TaskListInterval{
-			Start: now,
-			End:   time.Date(now.Year(), now.Month(), now.Day(), 23, 59, 59, 0, now.Location()),
-		}),
-	))
-	dispatcher.AddHandler(handlers.NewCommand(
-		"week",
-		w.taskListHandler(TaskListInterval{
-			Start: now,
-			End:   now.AddDate(0, 0, 7),
-		}),
-	))
-	dispatcher.AddHandler(handlers.NewCommand(
-		"month",
-		w.taskListHandler(TaskListInterval{
-			Start: now,
-			End:   now.AddDate(0, 1, 0),
-		}),
-	))
+	dispatcher.AddHandler(handlers.NewCommand(allList, w.taskListHandler(allList)))
+	dispatcher.AddHandler(handlers.NewCommand(todayList, w.taskListHandler(todayList)))
+	dispatcher.AddHandler(handlers.NewCommand(weekList, w.taskListHandler(weekList)))
+	dispatcher.AddHandler(handlers.NewCommand(monthList, w.taskListHandler(monthList)))
 	dispatcher.AddHandler(handlers.NewCallback(
 		func(cq *gotgbot.CallbackQuery) bool {
 			for _, prefix := range []string{createPrefix, cancelPrefix} {
@@ -114,9 +99,35 @@ func (w *Wrapper) Run() {
 }
 
 // Обработчик команд списка напоминаний по интервалу
-func (w *Wrapper) taskListHandler(interval TaskListInterval) handlers.Response {
+func (w *Wrapper) taskListHandler(intervalDescription string) handlers.Response {
 	return func(b *gotgbot.Bot, ctx *ext.Context) error {
-		var text string
+		var interval TaskListInterval
+		var listMessageText string
+		now := time.Now()
+		switch intervalDescription {
+		case todayList:
+			interval = TaskListInterval{
+				Start: now,
+				End:   time.Date(now.Year(), now.Month(), now.Day(), 23, 59, 59, 0, now.Location()),
+			}
+			listMessageText = "Список напоминаний на сегодня:"
+		case weekList:
+			interval = TaskListInterval{
+				Start: now,
+				End:   now.AddDate(0, 0, 7),
+			}
+			listMessageText = "Список напоминаний на неделю, "
+		case monthList:
+			interval = TaskListInterval{
+				Start: now,
+				End:   now.AddDate(0, 1, 0),
+			}
+			listMessageText = "Список напоминаний на месяц, "
+		default:
+			interval = TaskListInterval{}
+			listMessageText = "Список напоминаний:"
+		}
+
 		chatId := ctx.EffectiveChat.Id
 		var taskList []*tasks.Task
 		var err error
@@ -128,26 +139,16 @@ func (w *Wrapper) taskListHandler(interval TaskListInterval) handlers.Response {
 		}
 
 		if err != nil {
-			text = "Не удалось получить список задач :-("
-		} else {
-			if len(taskList) == 0 {
-				text = "Список напоминаний пуст :-)"
-			} else {
-				if interval.Start.IsZero() && interval.End.IsZero() {
-					text = "Список напоминаний:"
-				} else {
-					if interval.Start.Day() == interval.End.Day() {
-						text = "Список напоминаний на сегодня:"
-					} else {
-						start := Replacer.Replace(interval.Start.Format("2 January"))
-						end := Replacer.Replace(interval.End.Format("2 January"))
-						text = fmt.Sprintf("Список напоминаний с %s по %s:", start, end)
-					}
-				}
-			}
+			listMessageText = "Не удалось получить список задач :-("
+		} else if len(taskList) == 0 {
+			listMessageText = "Список напоминаний пуст :-)"
+		} else if intervalDescription == weekList || intervalDescription == monthList {
+			start := Replacer.Replace(interval.Start.Format("2 January"))
+			end := Replacer.Replace(interval.End.Format("2 January"))
+			listMessageText += fmt.Sprintf("с %s по %s:", start, end)
 		}
 
-		_, err = b.SendMessage(chatId, text, nil)
+		_, err = b.SendMessage(chatId, listMessageText, nil)
 		if err != nil {
 			log.Println("Ошибка отправки сообщения:", err.Error())
 		}
