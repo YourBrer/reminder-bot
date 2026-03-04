@@ -1,13 +1,14 @@
 package tasks
 
 import (
-	"fmt"
+	"errors"
 	"reminder/internal/users"
 	"time"
 
 	"gorm.io/gorm"
 )
 
+// Task представляет задачу-напоминание в системе
 type Task struct {
 	gorm.Model
 	ExecutionDate *time.Time
@@ -18,21 +19,26 @@ type Task struct {
 }
 
 // GetUserTime возвращает время напоминания со смещением по часовому поясу, заданному для пользователя
-func (t *Task) GetUserTime() *time.Time {
-	if t.ExecutionDate == nil || t.User.Location == "" {
-		fmt.Println("не установлена дата оповещения или локаль у пользователя")
-		return t.ExecutionDate
+func (t *Task) GetUserTime() (*time.Time, error) {
+	if t.ExecutionDate == nil {
+		return nil, errors.New("дата оповещения не установлена")
+	}
+
+	if t.User.Location == "" {
+		// Возвращаем UTC если локаль не установлена
+		return t.ExecutionDate, nil
 	}
 
 	ul, err := time.LoadLocation(t.User.Location)
 	if err != nil {
-		fmt.Println("ошибка получения локали")
-		return t.ExecutionDate
+		return t.ExecutionDate, err
 	}
+
 	ut := t.ExecutionDate.In(ul)
-	return &ut
+	return &ut, nil
 }
 
+// NewTask создает новый экземпляр Task
 func NewTask(description string, userId, chatId uint) *Task {
 	return &Task{
 		Description: description,

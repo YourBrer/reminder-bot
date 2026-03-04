@@ -1,6 +1,7 @@
 package bot
 
 import (
+	"context"
 	"fmt"
 	"html"
 	"log"
@@ -27,17 +28,25 @@ type Wrapper struct {
 	bot                 *gotgbot.Bot
 }
 
+// TaskListInterval представляет временной интервал для фильтрации задач
 type TaskListInterval struct {
 	Start time.Time
 	End   time.Time
 }
 
-const createPrefix = "create"
-const cancelPrefix = "cancel"
-const todayList = "today"
-const weekList = "week"
-const monthList = "month"
-const allList = "all"
+const (
+	createPrefix = "create"
+	cancelPrefix = "cancel"
+	todayList    = "today"
+	weekList     = "week"
+	monthList    = "month"
+	allList      = "all"
+)
+
+const (
+	pollingTimeout = 9 * time.Second
+	requestTimeout = 10 * time.Second
+)
 
 var months = []string{
 	"January", "января",
@@ -53,9 +62,11 @@ var months = []string{
 	"November", "ноября",
 	"December", "декабря",
 }
-var Replacer = strings.NewReplacer(months...)
+var replacer = strings.NewReplacer(months...)
 
-func (w *Wrapper) Run() {
+// Run запускает бота и начинает обработку обновлений
+// Функция блокирует выполнение до получения сигнала остановки через context
+func (w *Wrapper) Run(ctx context.Context) {
 	dispatcher := ext.NewDispatcher(&ext.DispatcherOpts{
 		Error: func(b *gotgbot.Bot, ctx *ext.Context, err error) ext.DispatcherAction {
 			log.Println("Ошибка при обновлении:", err.Error())
@@ -85,18 +96,22 @@ func (w *Wrapper) Run() {
 	err := updater.StartPolling(w.bot, &ext.PollingOpts{
 		DropPendingUpdates: true,
 		GetUpdatesOpts: &gotgbot.GetUpdatesOpts{
-			Timeout: 9,
-			RequestOpts: &gotgbot.RequestOpts{
-				Timeout: time.Second * 10,
-			},
+			Timeout:     int64(pollingTimeout.Seconds()),
+			RequestOpts: &gotgbot.RequestOpts{Timeout: requestTimeout},
 		},
 	})
 	if err != nil {
-		panic("Фатальная ошибка при старте поллинга: " + err.Error())
+		log.Printf("Фатальная ошибка при старте поллинга: %v", err)
+		return
 	}
 
-	go w.loop()
-	updater.Idle()
+	go w.loop(ctx)
+
+	// Ожидаем сигнал остановки
+	<-ctx.Done()
+	log.Println("Останавливаем бота...")
+	updater.Stop()
+	log.Println("Бот остановлен")
 }
 
 // Обработчик команд списка напоминаний по интервалу
@@ -144,8 +159,8 @@ func (w *Wrapper) taskListHandler(intervalDescription string) handlers.Response 
 		} else if len(taskList) == 0 {
 			listMessageText = "Список напоминаний пуст"
 		} else if intervalDescription == weekList || intervalDescription == monthList {
-			start := Replacer.Replace(interval.Start.Format("2 January"))
-			end := Replacer.Replace(interval.End.Format("2 January"))
+			start := replacer.Replace(interval.Start.Format("2 January"))
+			end := replacer.Replace(interval.End.Format("2 January"))
 			listMessageText += fmt.Sprintf("с %s по %s:", start, end)
 		}
 
@@ -164,7 +179,12 @@ func (w *Wrapper) taskListHandler(intervalDescription string) handlers.Response 
 				sb := strings.Builder{}
 				sb.WriteString(task.Description)
 				if task.ExecutionDate != nil {
-					dateString := Replacer.Replace(task.GetUserTime().Format("2 January в 15:04"))
+					userTime, err := task.GetUserTime()
+					if err != nil {
+						log.Printf("Ошибка получения времени пользователя: %v", err)
+						userTime = task.ExecutionDate
+					}
+					dateString := replacer.Replace(userTime.Format("2 January в 15:04"))
 					sb.WriteString("\n\nНапомню <strong>")
 					sb.WriteString(dateString)
 					sb.WriteString("</strong>")
@@ -176,11 +196,12 @@ func (w *Wrapper) taskListHandler(intervalDescription string) handlers.Response 
 					opts,
 				)
 				if err != nil {
-					log.Print(err)
+					log.Printf("Ошибка отправки сообщения: %v", err)
+					continue
 				}
 				err = w.msgRepo.Create(messages.NewMessage(uint(msg.MessageId), task.ID, task.ChatId))
 				if err != nil {
-					log.Print(err)
+					log.Printf("Ошибка создания сообщения: %v", err)
 				}
 			}
 		}
@@ -283,36 +304,48 @@ func (w *Wrapper) getDateButton(taskId uint) gotgbot.InlineKeyboardMarkup {
 }
 
 // Цикл проверки напоминаний
-func (w *Wrapper) loop() {
+func (w *Wrapper) loop(ctx context.Context) {
+	ticker := time.NewTicker(w.taskPollingInterval)
+	defer ticker.Stop()
+
 	for {
-		start := time.Now()
-		end := time.Now().Add(w.taskPollingInterval)
-		taskList, err := w.tasksRepo.GetByInterval(start, end)
-		if err != nil {
-			log.Print(err)
-		}
-		for _, task := range taskList {
-			go func() {
-				_, err = w.bot.SendMessage(int64(task.ChatId), task.Description, nil)
-				if err != nil {
-					log.Print(err)
-				}
+		select {
+		case <-ctx.Done():
+			log.Println("Останавливаем цикл проверки напоминаний")
+			return
+		case <-ticker.C:
+			start := time.Now()
+			end := start.Add(w.taskPollingInterval)
 
-				err = w.msgRepo.DeleteAllByTaskId(int(task.ID))
-				if err != nil {
-					log.Print(err)
-				}
-				err := w.tasksRepo.Delete(task)
-				if err != nil {
-					log.Print(err)
-				}
-			}()
-		}
+			taskList, err := w.tasksRepo.GetByInterval(start, end)
+			if err != nil {
+				log.Printf("Ошибка получения задач: %v", err)
+				continue
+			}
 
-		time.Sleep(w.taskPollingInterval)
+			for _, task := range taskList {
+				go func(t *tasks.Task) {
+					_, err := w.bot.SendMessage(int64(t.ChatId), t.Description, nil)
+					if err != nil {
+						log.Printf("Ошибка отправки сообщения: %v", err)
+					}
+
+					err = w.msgRepo.DeleteAllByTaskId(int(t.ID))
+					if err != nil {
+						log.Printf("Ошибка удаления сообщений: %v", err)
+					}
+
+					err = w.tasksRepo.Delete(t)
+					if err != nil {
+						log.Printf("Ошибка удаления задачи: %v", err)
+					}
+				}(task)
+			}
+		}
 	}
 }
 
+// NewWrapper создает новый экземпляр Wrapper с заданными зависимостями
 func NewWrapper(
 	bot *gotgbot.Bot,
 	tr *tasks.Repository,

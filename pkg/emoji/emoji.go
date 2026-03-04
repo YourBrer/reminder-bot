@@ -5,6 +5,7 @@ import (
 	"math/rand"
 )
 
+// GetRandomEmoji возвращает случайный эмодзи из предопределенного набора
 func GetRandomEmoji() string {
 	emoji := []string{
 		"😀", "😃", "😄", "😁", "😆", "😅", "🤣", "😂", "🙂", "🙃", "🫠", "😉", "😊", "😇", "🥰", "😍", "🤩", "😘", "😗", "☺️", "😚",
@@ -38,6 +39,7 @@ func GetRandomEmoji() string {
 	return emoji[rand.Intn(len(emoji))]
 }
 
+// AddRandomEmojiToText добавляет случайный эмодзи к тексту
 func AddRandomEmojiToText(text string) string {
 	return fmt.Sprintf("%s %s", text, GetRandomEmoji())
 }
