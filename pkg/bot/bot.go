@@ -7,6 +7,7 @@ import (
 	"reminder/internal/messages"
 	"reminder/internal/tasks"
 	"reminder/internal/users"
+	"reminder/pkg/emoji"
 	"strings"
 	"time"
 
@@ -139,16 +140,16 @@ func (w *Wrapper) taskListHandler(intervalDescription string) handlers.Response 
 		}
 
 		if err != nil {
-			listMessageText = "Не удалось получить список задач :-("
+			listMessageText = "Не удалось получить список задач"
 		} else if len(taskList) == 0 {
-			listMessageText = "Список напоминаний пуст :-)"
+			listMessageText = "Список напоминаний пуст"
 		} else if intervalDescription == weekList || intervalDescription == monthList {
 			start := Replacer.Replace(interval.Start.Format("2 January"))
 			end := Replacer.Replace(interval.End.Format("2 January"))
 			listMessageText += fmt.Sprintf("с %s по %s:", start, end)
 		}
 
-		_, err = b.SendMessage(chatId, listMessageText, nil)
+		_, err = b.SendMessage(chatId, emoji.AddRandomEmojiToText(listMessageText), nil)
 		if err != nil {
 			log.Println("Ошибка отправки сообщения:", err.Error())
 		}
@@ -169,7 +170,11 @@ func (w *Wrapper) taskListHandler(intervalDescription string) handlers.Response 
 					sb.WriteString("</strong>")
 				}
 
-				msg, err := b.SendMessage(int64(task.ChatId), sb.String(), opts)
+				msg, err := b.SendMessage(
+					int64(task.ChatId),
+					emoji.AddRandomEmojiToText(sb.String()),
+					opts,
+				)
 				if err != nil {
 					log.Print(err)
 				}
@@ -190,16 +195,16 @@ func (w *Wrapper) userMessageHandler() handlers.Response {
 	return func(b *gotgbot.Bot, ctx *ext.Context) error {
 		_, err := ctx.EffectiveMessage.Reply(
 			b,
-			"Создать напоминание из этого текста?",
+			emoji.AddRandomEmojiToText("Создать напоминание из этого текста?"),
 			&gotgbot.SendMessageOpts{
 				ReplyMarkup: &gotgbot.InlineKeyboardMarkup{
 					InlineKeyboard: [][]gotgbot.InlineKeyboardButton{
 						{
 							{
-								Text:         "Создать",
+								Text:         emoji.AddRandomEmojiToText("Создать"),
 								CallbackData: createPrefix,
 							},
-							{Text: "Отменить", CallbackData: "cancel"},
+							{Text: emoji.AddRandomEmojiToText("Отменить"), CallbackData: "cancel"},
 						},
 					},
 				},
@@ -231,7 +236,11 @@ func (w *Wrapper) handleCallback(b *gotgbot.Bot, ctx *ext.Context) error {
 		)
 		_, err := w.tasksRepo.Create(task)
 		if err != nil {
-			_, err = b.SendMessage(ctx.EffectiveChat.Id, "Не удалось создать напоминание :-(", nil)
+			_, err = b.SendMessage(
+				ctx.EffectiveChat.Id,
+				emoji.AddRandomEmojiToText("Не удалось создать напоминание"),
+				nil,
+			)
 			if err != nil {
 				log.Print(err)
 			}
@@ -239,7 +248,7 @@ func (w *Wrapper) handleCallback(b *gotgbot.Bot, ctx *ext.Context) error {
 
 		msg, _, err := cq.Message.EditText(
 			b,
-			"Напоминание создано.",
+			emoji.AddRandomEmojiToText("Напоминание создано."),
 			&gotgbot.EditMessageTextOpts{
 				ReplyMarkup: w.getDateButton(task.ID),
 			},
@@ -265,7 +274,7 @@ func (w *Wrapper) handleCallback(b *gotgbot.Bot, ctx *ext.Context) error {
 func (w *Wrapper) getDateButton(taskId uint) gotgbot.InlineKeyboardMarkup {
 	return gotgbot.InlineKeyboardMarkup{
 		InlineKeyboard: [][]gotgbot.InlineKeyboardButton{{{
-			Text: "Добавить дату и время напоминания",
+			Text: emoji.AddRandomEmojiToText("Добавить дату и время напоминания"),
 			WebApp: &gotgbot.WebAppInfo{
 				Url: fmt.Sprintf("%s/app?taskId=%d", w.tgWebAppUrl, taskId),
 			},
